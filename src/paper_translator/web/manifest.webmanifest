@@ -1,0 +1,8 @@
+{
+  "name": "Paper Translator",
+  "short_name": "Paper Translator",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f5f9",
+  "theme_color": "#4f46e5"
+}

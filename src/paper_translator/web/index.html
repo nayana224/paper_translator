@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#4f46e5">
+  <title>Paper Translator</title>
+  <link rel="manifest" href="/assets/manifest.webmanifest">
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div id="appShell" class="app-shell">
+    <header class="topbar">
+      <div class="brand-group">
+        <div class="brand-mark">PT</div>
+        <div>
+          <div class="brand-title">Paper Translator</div>
+          <div id="documentName" class="brand-subtitle">PDF를 열어 시작하세요</div>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button id="openPdfButton" class="button button-primary" type="button">Open PDF</button>
+        <button id="previousPageButton" class="icon-button" type="button" aria-label="Previous page">←</button>
+        <button id="nextPageButton" class="icon-button" type="button" aria-label="Next page">→</button>
+        <span id="pageIndicator" class="toolbar-label">Page - / -</span>
+        <button id="zoomOutButton" class="icon-button" type="button" aria-label="Zoom out">−</button>
+        <span id="zoomIndicator" class="toolbar-label">100%</span>
+        <button id="zoomInButton" class="icon-button" type="button" aria-label="Zoom in">+</button>
+        <label class="toggle-label">
+          <input id="autoTranslateToggle" type="checkbox" checked>
+          <span>Auto translate</span>
+        </label>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <section id="pdfPanel" class="pdf-panel drop-target">
+        <input id="pdfInput" type="file" accept="application/pdf,.pdf" hidden>
+        <div id="emptyState" class="empty-state">
+          <div class="empty-icon">PDF</div>
+          <h1>논문 PDF를 여세요</h1>
+          <p>파일을 끌어다 놓거나 Open PDF를 누르세요.</p>
+        </div>
+        <iframe
+          id="pdfFrame"
+          class="pdf-frame is-hidden"
+          title="PDF viewer"
+          src="/pdfjs/web/viewer.html?file="
+        ></iframe>
+        <div id="dropOverlay" class="drop-overlay">PDF를 놓아서 엽니다</div>
+      </section>
+
+      <aside class="side-panel">
+        <section class="panel-card translation-card">
+          <div class="section-header">
+            <div>
+              <h2>Korean translation</h2>
+              <div id="serverStatus" class="status-text">서버 확인 중...</div>
+            </div>
+            <div class="header-actions">
+              <span id="modelBadge" class="badge">Local</span>
+              <button id="copyTranslationButton" class="text-button" type="button">Copy</button>
+            </div>
+          </div>
+          <div id="translationOutput" class="markdown-output placeholder">
+            PDF에서 문장을 선택하거나 아래 English input에 직접 입력하세요.
+          </div>
+          <div id="streamStatus" class="stream-status"></div>
+        </section>
+
+        <section class="panel-card terms-card">
+          <div class="section-header compact">
+            <div>
+              <h2>Academic terms</h2>
+              <div class="section-hint">선택한 구절에 포함된 학술용어</div>
+            </div>
+            <button id="manageGlossaryButton" class="text-button" type="button">Manage</button>
+          </div>
+          <div id="termList" class="term-list empty-list">검출된 용어가 없습니다.</div>
+        </section>
+
+        <section class="panel-card input-card">
+          <div class="section-header compact">
+            <div>
+              <h2>English input</h2>
+              <div id="characterCount" class="section-hint">0 / 6000</div>
+            </div>
+            <div class="header-actions">
+              <button id="copyEnglishButton" class="text-button" type="button">Copy</button>
+              <button id="translateButton" class="button button-primary" type="button">Translate</button>
+            </div>
+          </div>
+          <textarea
+            id="englishInput"
+            maxlength="6000"
+            placeholder="PDF에서 문장을 선택하거나 영어 문장을 직접 입력하세요. Ctrl+Enter로 번역할 수 있습니다."
+          ></textarea>
+          <div class="history-row">
+            <span>Recent translations</span>
+            <div class="history-controls">
+              <button id="historyPreviousButton" class="icon-button small" type="button">‹</button>
+              <span id="historyIndicator">0 / 0</span>
+              <button id="historyNextButton" class="icon-button small" type="button">›</button>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </main>
+  </div>
+
+  <dialog id="glossaryDialog" class="dialog">
+    <div class="dialog-header">
+      <div>
+        <h2>Academic glossary</h2>
+        <p>사용자 용어는 모든 기기에서 같은 서버 glossary를 사용합니다.</p>
+      </div>
+      <button id="closeGlossaryButton" class="icon-button" type="button">×</button>
+    </div>
+    <div class="glossary-editor">
+      <label>
+        <span>English term</span>
+        <input id="glossaryEnglishInput" type="text" maxlength="200">
+      </label>
+      <label>
+        <span>Preferred Korean</span>
+        <input id="glossaryKoreanInput" type="text" maxlength="200">
+      </label>
+      <div class="glossary-editor-actions">
+        <button id="saveGlossaryButton" class="button button-primary" type="button">Save / Update</button>
+        <button id="deleteGlossaryButton" class="button button-danger" type="button">Delete user term</button>
+      </div>
+    </div>
+    <div id="glossaryTable" class="glossary-table"></div>
+  </dialog>
+
+  <script type="module" src="/assets/app.js"></script>
+</body>
+</html>
