@@ -2,6 +2,7 @@ const MAX_TRANSLATE_CHARACTERS = 6000;
 const MAX_AUTO_TRANSLATE_CHARACTERS = 1500;
 const MIN_AUTO_TRANSLATE_CHARACTERS = 8;
 const HISTORY_LIMIT = 20;
+
 const PDF_VIEWER_CSS = `
   #toolbarContainer,
   #sidebarContainer,
@@ -29,6 +30,7 @@ const PDF_VIEWER_CSS = `
 
 const state = {
   currentFile: null,
+  pdfObjectUrl: null,
   selectionTimer: null,
   activeTranslationController: null,
   translationText: "",
@@ -36,8 +38,6 @@ const state = {
   historyIndex: -1,
   glossary: [],
   viewerReady: false,
-  viewerListenersBound: false,
-  viewerSelectionBound: false,
 };
 
 const elements = {
@@ -127,16 +127,14 @@ function renderMarkdown(markdown) {
         listType = nextListType;
         output.push(`<${listType}>`);
       }
-      const content = unordered ? unordered[1] : ordered[1];
-      output.push(`<li>${renderInlineMarkdown(content)}</li>`);
+      output.push(`<li>${renderInlineMarkdown((unordered || ordered)[1])}</li>`);
       continue;
     }
 
     closeList();
-    if (!line.trim()) {
-      continue;
+    if (line.trim()) {
+      output.push(`<p>${renderInlineMarkdown(line)}</p>`);
     }
-    output.push(`<p>${renderInlineMarkdown(line)}</p>`);
   }
 
   closeList();
@@ -159,10 +157,19 @@ function historyStorageKey() {
   return `paper-translator-history-v1:${file.name}:${file.size}:${file.lastModified}`;
 }
 
+function updateHistoryControls() {
+  const count = state.history.length;
+  const position = state.historyIndex >= 0 ? state.historyIndex + 1 : 0;
+  elements.historyIndicator.textContent = `${position} / ${count}`;
+  elements.historyPreviousButton.disabled = state.historyIndex <= 0;
+  elements.historyNextButton.disabled =
+    state.historyIndex < 0 || state.historyIndex >= count - 1;
+}
+
 function loadHistory() {
   try {
-    const value = localStorage.getItem(historyStorageKey());
-    const parsed = value ? JSON.parse(value) : [];
+    const raw = localStorage.getItem(historyStorageKey());
+    const parsed = raw ? JSON.parse(raw) : [];
     state.history = Array.isArray(parsed) ? parsed.slice(-HISTORY_LIMIT) : [];
   } catch {
     state.history = [];
@@ -176,10 +183,9 @@ function saveHistory() {
 }
 
 function addHistory(sourceText, translatedText) {
-  const record = { sourceText, translatedText };
   const last = state.history.at(-1);
   if (!last || last.sourceText !== sourceText || last.translatedText !== translatedText) {
-    state.history.push(record);
+    state.history.push({ sourceText, translatedText });
     state.history = state.history.slice(-HISTORY_LIMIT);
   }
   state.historyIndex = state.history.length - 1;
@@ -194,18 +200,9 @@ function showHistoryRecord(index) {
   state.historyIndex = index;
   const record = state.history[index];
   elements.englishInput.value = record.sourceText;
-  state.translationText = record.translatedText;
   renderTranslation(record.translatedText);
   updateInputState();
   updateHistoryControls();
-}
-
-function updateHistoryControls() {
-  const count = state.history.length;
-  const position = state.historyIndex >= 0 ? state.historyIndex + 1 : 0;
-  elements.historyIndicator.textContent = `${position} / ${count}`;
-  elements.historyPreviousButton.disabled = state.historyIndex <= 0;
-  elements.historyNextButton.disabled = state.historyIndex < 0 || state.historyIndex >= count - 1;
 }
 
 function updateInputState() {
@@ -276,13 +273,9 @@ async function translateCurrentInput() {
     return;
   }
 
-  if (state.activeTranslationController) {
-    state.activeTranslationController.abort();
-  }
+  state.activeTranslationController?.abort();
   const controller = new AbortController();
   state.activeTranslationController = controller;
-
-  state.translationText = "";
   renderTranslation("");
   renderTerms([]);
   elements.streamStatus.textContent = "Translating...";
@@ -296,8 +289,7 @@ async function translateCurrentInput() {
       signal: controller.signal,
     });
     if (!response.ok || !response.body) {
-      const detail = await response.text();
-      throw new Error(detail || `HTTP ${response.status}`);
+      throw new Error((await response.text()) || `HTTP ${response.status}`);
     }
 
     const reader = response.body.getReader();
@@ -368,34 +360,13 @@ function scheduleSelectedText(text) {
     normalized.length < MIN_AUTO_TRANSLATE_CHARACTERS ||
     normalized.length > MAX_AUTO_TRANSLATE_CHARACTERS
   ) {
-    elements.streamStatus.textContent =
-      normalized.length > MAX_AUTO_TRANSLATE_CHARACTERS
-        ? "긴 선택은 자동 번역하지 않습니다. Translate를 누르세요."
-        : "";
+    if (normalized.length > MAX_AUTO_TRANSLATE_CHARACTERS) {
+      elements.streamStatus.textContent =
+        "긴 선택은 자동 번역하지 않습니다. Translate를 누르세요.";
+    }
     return;
   }
   void translateCurrentInput();
-}
-
-function bindPdfSelection() {
-  if (state.viewerSelectionBound) {
-    return;
-  }
-  const frameDocument = elements.pdfFrame.contentDocument;
-  const frameWindow = elements.pdfFrame.contentWindow;
-  if (!frameDocument || !frameWindow) {
-    return;
-  }
-  state.viewerSelectionBound = true;
-
-  frameDocument.addEventListener("selectionchange", () => {
-    if (state.selectionTimer) {
-      clearTimeout(state.selectionTimer);
-    }
-    state.selectionTimer = setTimeout(() => {
-      scheduleSelectedText(frameWindow.getSelection()?.toString() ?? "");
-    }, 180);
-  });
 }
 
 function injectViewerStyle() {
@@ -409,9 +380,26 @@ function injectViewerStyle() {
   frameDocument.head.appendChild(style);
 }
 
+function bindPdfSelection() {
+  const frameDocument = elements.pdfFrame.contentDocument;
+  const frameWindow = elements.pdfFrame.contentWindow;
+  if (!frameDocument || !frameWindow || frameDocument.body?.dataset.paperTranslatorSelectionBound) {
+    return;
+  }
+  frameDocument.body.dataset.paperTranslatorSelectionBound = "true";
+  frameDocument.addEventListener("selectionchange", () => {
+    if (state.selectionTimer) {
+      clearTimeout(state.selectionTimer);
+    }
+    state.selectionTimer = setTimeout(() => {
+      scheduleSelectedText(frameWindow.getSelection()?.toString() ?? "");
+    }, 180);
+  });
+}
+
 async function waitForPdfApplication() {
   const frameWindow = elements.pdfFrame.contentWindow;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 150; attempt += 1) {
     const app = frameWindow?.PDFViewerApplication;
     if (app?.initialized) {
       return app;
@@ -421,34 +409,59 @@ async function waitForPdfApplication() {
   throw new Error("PDF.js viewer initialization timed out.");
 }
 
-function bindViewerEvents(app) {
-  if (state.viewerListenersBound) {
-    return;
-  }
-  state.viewerListenersBound = true;
-  app.eventBus.on("pagechanging", () => updateViewerStatus(app));
-  app.eventBus.on("scalechanging", () => updateViewerStatus(app));
-}
-
 function updateViewerStatus(app) {
   const page = app.page || 0;
   const pages = app.pagesCount || app.pdfDocument?.numPages || 0;
   elements.pageIndicator.textContent = `Page ${page || "-"} / ${pages || "-"}`;
-
   const scale = app.pdfViewer?.currentScale;
   if (typeof scale === "number" && Number.isFinite(scale)) {
     elements.zoomIndicator.textContent = `${Math.round(scale * 100)}%`;
   }
 }
 
-async function openPdf(file) {
+async function initializeLoadedViewer() {
+  try {
+    const app = await waitForPdfApplication();
+    injectViewerStyle();
+    bindPdfSelection();
+
+    app.eventBus.on("pagechanging", () => updateViewerStatus(app));
+    app.eventBus.on("scalechanging", () => updateViewerStatus(app));
+    app.eventBus.on("documentloaded", () => {
+      state.viewerReady = true;
+      app.pdfViewer.currentScaleValue = "page-width";
+      updateViewerStatus(app);
+      elements.streamStatus.textContent = "";
+    });
+
+    if (app.pdfDocument) {
+      state.viewerReady = true;
+      app.pdfViewer.currentScaleValue = "page-width";
+      updateViewerStatus(app);
+      elements.streamStatus.textContent = "";
+    }
+  } catch (error) {
+    state.viewerReady = false;
+    elements.streamStatus.textContent = `PDF viewer failed: ${error.message}`;
+  }
+}
+
+function openPdf(file) {
   if (!file || (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf"))) {
     return;
   }
 
+  if (state.pdfObjectUrl) {
+    URL.revokeObjectURL(state.pdfObjectUrl);
+  }
+
   state.currentFile = file;
+  state.pdfObjectUrl = URL.createObjectURL(file);
   state.viewerReady = false;
   elements.documentName.textContent = file.name;
+  elements.pageIndicator.textContent = "Page - / -";
+  elements.zoomIndicator.textContent = "100%";
+  elements.streamStatus.textContent = "PDF 여는 중...";
   elements.emptyState.classList.add("is-hidden");
   elements.pdfFrame.classList.remove("is-hidden");
   loadHistory();
@@ -456,42 +469,27 @@ async function openPdf(file) {
     showHistoryRecord(state.historyIndex);
   }
 
-  try {
-    const app = await waitForPdfApplication();
-    const data = new Uint8Array(await file.arrayBuffer());
-    if (app.pdfDocument) {
-      await app.close();
-    }
-    await app.open({ data });
-    app.pdfViewer.currentScaleValue = "page-width";
-    injectViewerStyle();
-    bindPdfSelection();
-    bindViewerEvents(app);
-    state.viewerReady = true;
-    updateViewerStatus(app);
-  } catch (error) {
-    elements.streamStatus.textContent = `PDF open failed: ${error.message}`;
-  }
+  const encodedUrl = encodeURIComponent(state.pdfObjectUrl);
+  elements.pdfFrame.src = `/pdfjs/web/viewer.html?file=${encodedUrl}`;
 }
 
-async function currentPdfApplication() {
+function currentPdfApplication() {
   if (!state.viewerReady) {
     return null;
   }
   return elements.pdfFrame.contentWindow?.PDFViewerApplication ?? null;
 }
 
-async function changePage(delta) {
-  const app = await currentPdfApplication();
+function changePage(delta) {
+  const app = currentPdfApplication();
   if (!app?.pdfDocument) {
     return;
   }
-  const nextPage = Math.min(Math.max(app.page + delta, 1), app.pagesCount);
-  app.page = nextPage;
+  app.page = Math.min(Math.max(app.page + delta, 1), app.pagesCount);
 }
 
-async function changeZoom(delta) {
-  const app = await currentPdfApplication();
+function changeZoom(delta) {
+  const app = currentPdfApplication();
   if (!app?.pdfViewer) {
     return;
   }
@@ -501,10 +499,9 @@ async function changeZoom(delta) {
 }
 
 async function copyText(text) {
-  if (!text) {
-    return;
+  if (text) {
+    await navigator.clipboard.writeText(text);
   }
-  await navigator.clipboard.writeText(text);
 }
 
 async function loadGlossary() {
@@ -548,8 +545,7 @@ async function openGlossaryDialog(term = null) {
   }
   elements.glossaryEnglishInput.value = term?.english ?? "";
   elements.glossaryKoreanInput.value = term?.korean ?? "";
-  const source = term?.source ?? "default";
-  elements.deleteGlossaryButton.disabled = source !== "user";
+  elements.deleteGlossaryButton.disabled = (term?.source ?? "default") !== "user";
   elements.glossaryDialog.showModal();
 }
 
@@ -594,11 +590,11 @@ async function deleteGlossaryTerm() {
 
 function bindEvents() {
   elements.openPdfButton.addEventListener("click", () => elements.pdfInput.click());
-  elements.pdfInput.addEventListener("change", () => void openPdf(elements.pdfInput.files?.[0]));
-  elements.previousPageButton.addEventListener("click", () => void changePage(-1));
-  elements.nextPageButton.addEventListener("click", () => void changePage(1));
-  elements.zoomOutButton.addEventListener("click", () => void changeZoom(-0.15));
-  elements.zoomInButton.addEventListener("click", () => void changeZoom(0.15));
+  elements.pdfInput.addEventListener("change", () => openPdf(elements.pdfInput.files?.[0]));
+  elements.previousPageButton.addEventListener("click", () => changePage(-1));
+  elements.nextPageButton.addEventListener("click", () => changePage(1));
+  elements.zoomOutButton.addEventListener("click", () => changeZoom(-0.15));
+  elements.zoomInButton.addEventListener("click", () => changeZoom(0.15));
   elements.translateButton.addEventListener("click", () => void translateCurrentInput());
   elements.englishInput.addEventListener("input", updateInputState);
   elements.englishInput.addEventListener("keydown", (event) => {
@@ -642,15 +638,19 @@ function bindEvents() {
         candidate.type === "application/pdf" || candidate.name.toLowerCase().endsWith(".pdf"),
     );
     if (file) {
-      void openPdf(file);
+      openPdf(file);
     }
   });
 
   elements.pdfFrame.addEventListener("load", () => {
-    state.viewerListenersBound = false;
-    state.viewerSelectionBound = false;
-    injectViewerStyle();
-    bindPdfSelection();
+    state.viewerReady = false;
+    void initializeLoadedViewer();
+  });
+
+  window.addEventListener("beforeunload", () => {
+    if (state.pdfObjectUrl) {
+      URL.revokeObjectURL(state.pdfObjectUrl);
+    }
   });
 }
 
