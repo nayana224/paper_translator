@@ -10,4 +10,7 @@
 - Markdown rendering 유지
 - Academic glossary를 server에서 중앙 관리
 - 최근 번역 history를 browser localStorage에 유지
-- GitHub 공개를 위한 setup/architecture/API/operations/development/security 문서 정리
+- `scripts/setup.sh`와 `scripts/check_environment.sh` 추가
+- GitHub Actions CI에서 Python 3.10/3.12 test와 JavaScript syntax 검사 추가
+- MIT License 추가
+- GitHub 공개와 fresh clone 검증 절차 문서화

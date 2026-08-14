@@ -13,12 +13,50 @@
 - Ollama에서 `translategemma:4b` 실행 가능
 - remote access가 필요하면 Tailscale
 
-Ollama와 NVIDIA driver 설치 자체는 이 repository의 책임 범위 밖입니다.
+Ollama와 NVIDIA driver 설치 자체는 이 repository의 책임 범위 밖입니다. Ollama 설치는 공식 문서를
+따르고, 설치 후 아래 명령이 정상 동작하는지 먼저 확인합니다.
+
+```bash
+ollama --version
+```
+
 공식 source는 [references.md](references.md)에 정리되어 있습니다.
 
-## 2. Python 환경
+## 2. 권장 설치
 
-repository root에서 실행합니다.
+fresh clone에서는 repository root에서 다음 명령을 권장합니다.
+
+```bash
+./scripts/check_environment.sh || true
+./scripts/setup.sh
+```
+
+`setup.sh`가 수행하는 작업:
+
+1. Linux / Python / Ollama 존재 여부 확인
+2. `.venv` 생성 또는 재사용
+3. 현재 repository를 editable install
+4. `translategemma:4b`가 없으면 `ollama pull`
+5. 고정된 PDF.js legacy distribution 설치
+
+다음 항목은 자동으로 변경하지 않습니다.
+
+- NVIDIA driver
+- CUDA
+- Ollama 자체 설치
+- Tailscale 자체 설치 또는 로그인
+- firewall / router 설정
+
+설치 후:
+
+```bash
+source .venv/bin/activate
+paper-translator-server
+```
+
+## 3. 수동 Python 환경
+
+자동 setup을 사용하지 않는 경우 repository root에서 실행합니다.
 
 ```bash
 python3 -m venv .venv
@@ -30,13 +68,12 @@ python -m pip install -e .
 정상 확인:
 
 ```bash
-paper-translator-server --help
+command -v paper-translator-server
 ```
 
-`uvicorn` 자체가 application runner이므로 `--help` 출력이 필수는 아닙니다. 실행 명령이 shell에서
-인식되면 package installation은 완료된 상태입니다.
+`.venv/bin/paper-translator-server`가 확인되면 package installation이 완료된 상태입니다.
 
-## 3. TranslateGemma
+## 4. TranslateGemma
 
 설치:
 
@@ -60,7 +97,7 @@ ollama run translategemma:4b
 
 영어 논문 문장을 넣어 한국어 번역이 반환되는지 확인합니다.
 
-## 4. PDF.js
+## 5. PDF.js
 
 Paper Translator는 Mozilla 공식 PDF.js release의 고정 버전을 사용자 data directory에 설치합니다.
 
@@ -76,7 +113,7 @@ paper-translator-install-pdfjs
 
 repository에는 PDF.js 배포 바이너리를 포함하지 않습니다.
 
-## 5. Server 실행
+## 6. Server 실행
 
 ```bash
 paper-translator-server
@@ -112,7 +149,7 @@ curl http://127.0.0.1:8765/health
 http://127.0.0.1:8765
 ```
 
-## 6. 환경변수
+## 7. 환경변수
 
 기본값을 바꿔야 할 때만 사용합니다.
 
@@ -124,11 +161,12 @@ export PAPER_TRANSLATOR_MODEL=translategemma:4b
 
 Tailscale Serve를 사용할 때는 `PAPER_TRANSLATOR_HOST=127.0.0.1`을 그대로 유지하는 것을 권장합니다.
 
-## 7. 초기 기능 확인
+## 8. 초기 기능 확인
 
-1. Web UI가 표시되는지 확인합니다.
-2. PDF를 drag & drop으로 엽니다.
-3. PDF의 영어 한 문장을 선택합니다.
-4. Auto translate가 켜져 있으면 번역이 streaming으로 표시되는지 확인합니다.
-5. Academic terms가 검출되는지 확인합니다.
-6. glossary에서 사용자 용어를 저장한 뒤 같은 구절을 재번역해 용어가 유지되는지 확인합니다.
+1. `./scripts/check_environment.sh`의 `[FAIL]` 항목이 없는지 확인합니다.
+2. Web UI가 표시되는지 확인합니다.
+3. PDF를 drag & drop으로 엽니다.
+4. PDF의 영어 한 문장을 선택합니다.
+5. Auto translate가 켜져 있으면 번역이 streaming으로 표시되는지 확인합니다.
+6. Academic terms가 검출되는지 확인합니다.
+7. glossary에서 사용자 용어를 저장한 뒤 같은 구절을 재번역해 용어가 유지되는지 확인합니다.
