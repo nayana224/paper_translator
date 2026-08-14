@@ -30,7 +30,7 @@ const PDF_VIEWER_CSS = `
 
 const state = {
   currentFile: null,
-  pdfObjectUrl: null,
+  pdfSessionId: null,
   selectionTimer: null,
   activeTranslationController: null,
   translationText: "",
@@ -425,38 +425,49 @@ async function initializeLoadedViewer() {
     injectViewerStyle();
     bindPdfSelection();
 
+    const markReady = () => {
+      state.viewerReady = Boolean(app.pdfDocument);
+      if (!state.viewerReady) {
+        return;
+      }
+      app.pdfViewer.currentScaleValue = "page-width";
+      updateViewerStatus(app);
+      elements.streamStatus.textContent = "";
+    };
+
     app.eventBus.on("pagechanging", () => updateViewerStatus(app));
     app.eventBus.on("scalechanging", () => updateViewerStatus(app));
-    app.eventBus.on("documentloaded", () => {
-      state.viewerReady = true;
-      app.pdfViewer.currentScaleValue = "page-width";
-      updateViewerStatus(app);
-      elements.streamStatus.textContent = "";
+    app.eventBus.on("documentloaded", markReady);
+    app.eventBus.on("documenterror", (event) => {
+      state.viewerReady = false;
+      elements.streamStatus.textContent = `PDF open failed: ${event.message || "unknown error"}`;
     });
-
-    if (app.pdfDocument) {
-      state.viewerReady = true;
-      app.pdfViewer.currentScaleValue = "page-width";
-      updateViewerStatus(app);
-      elements.streamStatus.textContent = "";
-    }
+    markReady();
   } catch (error) {
     state.viewerReady = false;
     elements.streamStatus.textContent = `PDF viewer failed: ${error.message}`;
   }
 }
 
-function openPdf(file) {
+async function deletePdfSession() {
+  if (!state.pdfSessionId) {
+    return;
+  }
+  const sessionId = state.pdfSessionId;
+  state.pdfSessionId = null;
+  try {
+    await fetch(`/api/pdf-session/${sessionId}`, { method: "DELETE" });
+  } catch {
+    // Server가 이미 종료된 경우 cleanup 실패는 무시한다.
+  }
+}
+
+async function openPdf(file) {
   if (!file || (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf"))) {
     return;
   }
 
-  if (state.pdfObjectUrl) {
-    URL.revokeObjectURL(state.pdfObjectUrl);
-  }
-
   state.currentFile = file;
-  state.pdfObjectUrl = URL.createObjectURL(file);
   state.viewerReady = false;
   elements.documentName.textContent = file.name;
   elements.pageIndicator.textContent = "Page - / -";
@@ -469,8 +480,24 @@ function openPdf(file) {
     showHistoryRecord(state.historyIndex);
   }
 
-  const encodedUrl = encodeURIComponent(state.pdfObjectUrl);
-  elements.pdfFrame.src = `/pdfjs/web/viewer.html?file=${encodedUrl}`;
+  try {
+    await deletePdfSession();
+    const response = await fetch("/api/pdf-session", {
+      method: "POST",
+      headers: { "Content-Type": "application/pdf" },
+      body: file,
+    });
+    if (!response.ok) {
+      throw new Error((await response.text()) || `HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    state.pdfSessionId = payload.session_id;
+    elements.pdfFrame.src =
+      `/pdfjs/web/viewer.html?file=${encodeURIComponent(payload.url)}`;
+  } catch (error) {
+    state.viewerReady = false;
+    elements.streamStatus.textContent = `PDF open failed: ${error.message}`;
+  }
 }
 
 function currentPdfApplication() {
@@ -590,7 +617,7 @@ async function deleteGlossaryTerm() {
 
 function bindEvents() {
   elements.openPdfButton.addEventListener("click", () => elements.pdfInput.click());
-  elements.pdfInput.addEventListener("change", () => openPdf(elements.pdfInput.files?.[0]));
+  elements.pdfInput.addEventListener("change", () => void openPdf(elements.pdfInput.files?.[0]));
   elements.previousPageButton.addEventListener("click", () => changePage(-1));
   elements.nextPageButton.addEventListener("click", () => changePage(1));
   elements.zoomOutButton.addEventListener("click", () => changeZoom(-0.15));
@@ -638,7 +665,7 @@ function bindEvents() {
         candidate.type === "application/pdf" || candidate.name.toLowerCase().endsWith(".pdf"),
     );
     if (file) {
-      openPdf(file);
+      void openPdf(file);
     }
   });
 
@@ -647,9 +674,9 @@ function bindEvents() {
     void initializeLoadedViewer();
   });
 
-  window.addEventListener("beforeunload", () => {
-    if (state.pdfObjectUrl) {
-      URL.revokeObjectURL(state.pdfObjectUrl);
+  window.addEventListener("pagehide", () => {
+    if (state.pdfSessionId) {
+      navigator.sendBeacon?.(`/api/pdf-session/${state.pdfSessionId}`);
     }
   });
 }

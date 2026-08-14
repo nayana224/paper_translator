@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+from collections import OrderedDict
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -16,6 +18,8 @@ from paper_translator.pdfjs_assets import is_pdfjs_ready, pdfjs_install_dir
 
 MAX_TRANSLATE_CHARACTERS = 6000
 MAX_TERM_CHARACTERS = 200
+MAX_PDF_BYTES = 50 * 1024 * 1024
+MAX_PDF_SESSIONS = 4
 
 
 class TranslationRequest(BaseModel):
@@ -48,6 +52,11 @@ class HealthResponse(BaseModel):
     model: str
 
 
+class PdfSessionResponse(BaseModel):
+    session_id: str
+    url: str
+
+
 def _web_root() -> Path:
     return Path(__file__).resolve().parent / "web"
 
@@ -66,6 +75,31 @@ def _term_responses(
     ]
 
 
+async def _read_pdf_body(request: Request) -> bytes:
+    """PDF upload를 제한된 메모리 범위에서 읽는다."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            declared_bytes = int(content_length)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length.") from exc
+        if declared_bytes > MAX_PDF_BYTES:
+            raise HTTPException(status_code=413, detail="PDF exceeds the 50 MiB limit.")
+
+    chunks: list[bytes] = []
+    total_bytes = 0
+    async for chunk in request.stream():
+        total_bytes += len(chunk)
+        if total_bytes > MAX_PDF_BYTES:
+            raise HTTPException(status_code=413, detail="PDF exceeds the 50 MiB limit.")
+        chunks.append(chunk)
+
+    pdf_bytes = b"".join(chunks)
+    if not pdf_bytes.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="Uploaded data is not a PDF file.")
+    return pdf_bytes
+
+
 def create_app(
     model: str = DEFAULT_MODEL,
     glossary: AcademicGlossary | None = None,
@@ -81,6 +115,7 @@ def create_app(
     )
     app.state.glossary = glossary or AcademicGlossary()
     app.state.ollama_client = ollama_client or OllamaClient(model=model)
+    app.state.pdf_sessions = OrderedDict()
 
     web_root = _web_root()
     app.mount("/assets", StaticFiles(directory=web_root), name="assets")
@@ -101,6 +136,38 @@ def create_app(
     def health() -> HealthResponse:
         client: OllamaClient = app.state.ollama_client
         return HealthResponse(status="ok", model=client.model)
+
+    @app.post("/api/pdf-session", response_model=PdfSessionResponse)
+    async def create_pdf_session(request: Request) -> PdfSessionResponse:
+        pdf_bytes = await _read_pdf_body(request)
+        sessions: OrderedDict[str, bytes] = app.state.pdf_sessions
+        while len(sessions) >= MAX_PDF_SESSIONS:
+            sessions.popitem(last=False)
+
+        session_id = uuid4().hex
+        sessions[session_id] = pdf_bytes
+        return PdfSessionResponse(
+            session_id=session_id,
+            url=f"/api/pdf-session/{session_id}",
+        )
+
+    @app.get("/api/pdf-session/{session_id}", include_in_schema=False)
+    def read_pdf_session(session_id: str) -> Response:
+        sessions: OrderedDict[str, bytes] = app.state.pdf_sessions
+        pdf_bytes = sessions.get(session_id)
+        if pdf_bytes is None:
+            raise HTTPException(status_code=404, detail="PDF session not found.")
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.delete("/api/pdf-session/{session_id}", status_code=204)
+    def delete_pdf_session(session_id: str) -> Response:
+        sessions: OrderedDict[str, bytes] = app.state.pdf_sessions
+        sessions.pop(session_id, None)
+        return Response(status_code=204)
 
     @app.get("/api/glossary", response_model=list[AcademicTermResponse])
     def list_glossary() -> list[AcademicTermResponse]:

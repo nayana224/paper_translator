@@ -25,6 +25,33 @@ Server와 configured model 정보를 확인합니다.
 
 이 endpoint는 Ollama inference를 실행하지 않습니다.
 
+## POST /api/pdf-session
+
+PDF.js viewer가 읽을 수 있도록 PDF binary를 server memory에 임시 등록합니다.
+
+Request body는 `application/pdf` raw binary이며 한 파일은 최대 50 MiB입니다. PDF header가 없는 데이터는
+거부합니다.
+
+Response:
+
+```json
+{
+  "session_id": "...",
+  "url": "/api/pdf-session/..."
+}
+```
+
+Server는 최근 PDF session 4개까지만 memory에 유지하며 디스크에는 저장하지 않습니다.
+
+## GET /api/pdf-session/{session_id}
+
+PDF.js viewer 전용 same-origin PDF response를 반환합니다. 정상 응답의 content type은
+`application/pdf`입니다.
+
+## DELETE /api/pdf-session/{session_id}
+
+더 이상 사용하지 않는 PDF memory session을 제거합니다. 없는 session을 삭제해도 204를 반환합니다.
+
 ## POST /api/translate
 
 완료된 번역을 하나의 JSON response로 반환합니다.

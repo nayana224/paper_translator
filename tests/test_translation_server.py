@@ -34,6 +34,33 @@ class TranslationServerTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["model"], "fake-model")
 
+    def test_pdf_session_round_trip(self) -> None:
+        pdf_bytes = b"%PDF-1.4\nminimal-test-pdf"
+        create = self.client.post(
+            "/api/pdf-session",
+            content=pdf_bytes,
+            headers={"Content-Type": "application/pdf"},
+        )
+        self.assertEqual(create.status_code, 200)
+        payload = create.json()
+
+        read = self.client.get(payload["url"])
+        self.assertEqual(read.status_code, 200)
+        self.assertEqual(read.headers["content-type"], "application/pdf")
+        self.assertEqual(read.content, pdf_bytes)
+
+        delete = self.client.delete(f"/api/pdf-session/{payload['session_id']}")
+        self.assertEqual(delete.status_code, 204)
+        self.assertEqual(self.client.get(payload["url"]).status_code, 404)
+
+    def test_pdf_session_rejects_non_pdf_data(self) -> None:
+        response = self.client.post(
+            "/api/pdf-session",
+            content=b"not a pdf",
+            headers={"Content-Type": "application/pdf"},
+        )
+        self.assertEqual(response.status_code, 400)
+
     def test_translate_returns_terms(self) -> None:
         response = self.client.post(
             "/api/translate",

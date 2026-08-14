@@ -86,7 +86,8 @@ tailscale serve --bg 8765
 ## 데이터 저장
 
 - 사용자 glossary: `~/.config/paper-translator/glossary.json`
-- PDF 원본: 기본적으로 server에 업로드하지 않으며 브라우저 메모리에서 PDF.js가 읽습니다.
+- PDF 원본: PDF.js 렌더링을 위해 server 메모리에 임시 등록하며 디스크에는 저장하지 않습니다.
+- PDF 임시 session: 최대 50 MiB/file, 최근 4개까지만 server memory에 유지합니다.
 - 최근 번역 history: 각 브라우저의 `localStorage`
 - Ollama model: Ollama의 기본 model storage를 사용합니다.
 
