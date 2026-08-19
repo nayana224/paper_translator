@@ -1,49 +1,41 @@
+import * as pdfjsLib from "/pdfjs/build/pdf.mjs";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdfjs/build/pdf.worker.mjs";
+
 const MAX_TRANSLATE_CHARACTERS = 6000;
 const MAX_AUTO_TRANSLATE_CHARACTERS = 1500;
 const MIN_AUTO_TRANSLATE_CHARACTERS = 8;
 const HISTORY_LIMIT = 20;
-
-const PDF_VIEWER_CSS = `
-  #toolbarContainer,
-  #sidebarContainer,
-  #secondaryToolbar,
-  #findbar,
-  #editorUndoBar {
-    display: none !important;
-  }
-  #mainContainer {
-    inset-inline-start: 0 !important;
-  }
-  #viewerContainer {
-    inset: 0 !important;
-    background: #eef0f5 !important;
-  }
-  .pdfViewer .page {
-    box-shadow: 0 2px 14px rgba(28, 34, 52, 0.10) !important;
-    border: 0 !important;
-    margin: 14px auto !important;
-  }
-  ::selection {
-    background: rgba(79, 70, 229, 0.32) !important;
-  }
-`;
+const MIN_PDF_SCALE = 0.5;
+const MAX_PDF_SCALE = 3.5;
+const PDF_ZOOM_STEP = 0.15;
 
 const state = {
   currentFile: null,
   pdfSessionId: null,
+  pdfLoadingTask: null,
+  pdfDocument: null,
+  currentPage: 0,
+  zoomScale: 1,
+  renderTask: null,
+  textLayer: null,
+  renderSequence: 0,
+  openSequence: 0,
   selectionTimer: null,
   activeTranslationController: null,
   translationText: "",
   history: [],
   historyIndex: -1,
   glossary: [],
-  viewerReady: false,
 };
 
 const elements = {
   pdfPanel: document.getElementById("pdfPanel"),
   pdfInput: document.getElementById("pdfInput"),
-  pdfFrame: document.getElementById("pdfFrame"),
+  pdfViewport: document.getElementById("pdfViewport"),
+  pdfPage: document.getElementById("pdfPage"),
+  pdfCanvas: document.getElementById("pdfCanvas"),
+  pdfTextLayer: document.getElementById("pdfTextLayer"),
   emptyState: document.getElementById("emptyState"),
   documentName: document.getElementById("documentName"),
   openPdfButton: document.getElementById("openPdfButton"),
@@ -369,84 +361,40 @@ function scheduleSelectedText(text) {
   void translateCurrentInput();
 }
 
-function injectViewerStyle() {
-  const frameDocument = elements.pdfFrame.contentDocument;
-  if (!frameDocument || frameDocument.getElementById("paper-translator-style")) {
-    return;
-  }
-  const style = frameDocument.createElement("style");
-  style.id = "paper-translator-style";
-  style.textContent = PDF_VIEWER_CSS;
-  frameDocument.head.appendChild(style);
+function updateViewerControls() {
+  const pages = state.pdfDocument?.numPages ?? 0;
+  const page = state.currentPage || 0;
+  elements.pageIndicator.textContent = pages ? `Page ${page} / ${pages}` : "Page - / -";
+  elements.zoomIndicator.textContent = pages ? `${Math.round(state.zoomScale * 100)}%` : "100%";
+  elements.previousPageButton.disabled = !pages || page <= 1;
+  elements.nextPageButton.disabled = !pages || page >= pages;
+  elements.zoomOutButton.disabled = !pages || state.zoomScale <= MIN_PDF_SCALE;
+  elements.zoomInButton.disabled = !pages || state.zoomScale >= MAX_PDF_SCALE;
 }
 
-function bindPdfSelection() {
-  const frameDocument = elements.pdfFrame.contentDocument;
-  const frameWindow = elements.pdfFrame.contentWindow;
-  if (!frameDocument || !frameWindow || frameDocument.body?.dataset.paperTranslatorSelectionBound) {
-    return;
-  }
-  frameDocument.body.dataset.paperTranslatorSelectionBound = "true";
-  frameDocument.addEventListener("selectionchange", () => {
-    if (state.selectionTimer) {
-      clearTimeout(state.selectionTimer);
-    }
-    state.selectionTimer = setTimeout(() => {
-      scheduleSelectedText(frameWindow.getSelection()?.toString() ?? "");
-    }, 180);
-  });
+function cancelPageRender() {
+  state.renderSequence += 1;
+  state.renderTask?.cancel();
+  state.renderTask = null;
+  state.textLayer?.cancel?.();
+  state.textLayer = null;
 }
 
-async function waitForPdfApplication() {
-  const frameWindow = elements.pdfFrame.contentWindow;
-  for (let attempt = 0; attempt < 150; attempt += 1) {
-    const app = frameWindow?.PDFViewerApplication;
-    if (app?.initialized) {
-      return app;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+async function closePdfDocument() {
+  cancelPageRender();
+  if (state.pdfLoadingTask) {
+    await state.pdfLoadingTask.destroy().catch(() => {});
+  } else if (state.pdfDocument) {
+    await state.pdfDocument.destroy().catch(() => {});
   }
-  throw new Error("PDF.js viewer initialization timed out.");
-}
-
-function updateViewerStatus(app) {
-  const page = app.page || 0;
-  const pages = app.pagesCount || app.pdfDocument?.numPages || 0;
-  elements.pageIndicator.textContent = `Page ${page || "-"} / ${pages || "-"}`;
-  const scale = app.pdfViewer?.currentScale;
-  if (typeof scale === "number" && Number.isFinite(scale)) {
-    elements.zoomIndicator.textContent = `${Math.round(scale * 100)}%`;
-  }
-}
-
-async function initializeLoadedViewer() {
-  try {
-    const app = await waitForPdfApplication();
-    injectViewerStyle();
-    bindPdfSelection();
-
-    const markReady = () => {
-      state.viewerReady = Boolean(app.pdfDocument);
-      if (!state.viewerReady) {
-        return;
-      }
-      app.pdfViewer.currentScaleValue = "page-width";
-      updateViewerStatus(app);
-      elements.streamStatus.textContent = "";
-    };
-
-    app.eventBus.on("pagechanging", () => updateViewerStatus(app));
-    app.eventBus.on("scalechanging", () => updateViewerStatus(app));
-    app.eventBus.on("documentloaded", markReady);
-    app.eventBus.on("documenterror", (event) => {
-      state.viewerReady = false;
-      elements.streamStatus.textContent = `PDF open failed: ${event.message || "unknown error"}`;
-    });
-    markReady();
-  } catch (error) {
-    state.viewerReady = false;
-    elements.streamStatus.textContent = `PDF viewer failed: ${error.message}`;
-  }
+  state.pdfLoadingTask = null;
+  state.pdfDocument = null;
+  state.currentPage = 0;
+  state.zoomScale = 1;
+  elements.pdfTextLayer.replaceChildren();
+  const context = elements.pdfCanvas.getContext("2d");
+  context?.clearRect(0, 0, elements.pdfCanvas.width, elements.pdfCanvas.height);
+  updateViewerControls();
 }
 
 async function deletePdfSession() {
@@ -462,26 +410,127 @@ async function deletePdfSession() {
   }
 }
 
+function computePageWidthScale(page) {
+  const baseViewport = page.getViewport({ scale: 1 });
+  const availableWidth = Math.max(elements.pdfViewport.clientWidth - 48, 240);
+  return Math.min(
+    Math.max(availableWidth / baseViewport.width, MIN_PDF_SCALE),
+    MAX_PDF_SCALE,
+  );
+}
+
+async function renderTextLayer(page, viewport, renderSequence) {
+  elements.pdfTextLayer.replaceChildren();
+  elements.pdfTextLayer.style.width = `${viewport.width}px`;
+  elements.pdfTextLayer.style.height = `${viewport.height}px`;
+  elements.pdfTextLayer.style.setProperty("--scale-factor", viewport.scale.toString());
+
+  const textContent = await page.getTextContent({ includeMarkedContent: true });
+  if (renderSequence !== state.renderSequence) {
+    return;
+  }
+
+  const textLayer = new pdfjsLib.TextLayer({
+    textContentSource: textContent,
+    container: elements.pdfTextLayer,
+    viewport,
+  });
+  state.textLayer = textLayer;
+  await textLayer.render();
+
+  if (renderSequence === state.renderSequence) {
+    state.textLayer = null;
+  }
+}
+
+async function renderCurrentPage() {
+  if (!state.pdfDocument || state.currentPage < 1) {
+    return;
+  }
+
+  cancelPageRender();
+  const renderSequence = state.renderSequence;
+  elements.streamStatus.textContent = "PDF page rendering...";
+
+  try {
+    const page = await state.pdfDocument.getPage(state.currentPage);
+    if (renderSequence !== state.renderSequence) {
+      return;
+    }
+
+    const viewport = page.getViewport({ scale: state.zoomScale });
+    const outputScale = window.devicePixelRatio || 1;
+    const canvasContext = elements.pdfCanvas.getContext("2d", { alpha: false });
+    if (!canvasContext) {
+      throw new Error("Canvas 2D context를 생성하지 못했습니다.");
+    }
+
+    elements.pdfPage.style.width = `${viewport.width}px`;
+    elements.pdfPage.style.height = `${viewport.height}px`;
+    elements.pdfCanvas.width = Math.floor(viewport.width * outputScale);
+    elements.pdfCanvas.height = Math.floor(viewport.height * outputScale);
+    elements.pdfCanvas.style.width = `${viewport.width}px`;
+    elements.pdfCanvas.style.height = `${viewport.height}px`;
+
+    const transform =
+      outputScale === 1 ? null : [outputScale, 0, 0, outputScale, 0, 0];
+    const renderTask = page.render({
+      canvasContext,
+      transform,
+      viewport,
+    });
+    state.renderTask = renderTask;
+    await renderTask.promise;
+
+    if (renderSequence !== state.renderSequence) {
+      return;
+    }
+    state.renderTask = null;
+
+    try {
+      await renderTextLayer(page, viewport, renderSequence);
+      if (renderSequence === state.renderSequence) {
+        elements.streamStatus.textContent = "";
+      }
+    } catch (error) {
+      if (renderSequence === state.renderSequence) {
+        elements.streamStatus.textContent =
+          `PDF는 표시됐지만 text selection을 준비하지 못했습니다: ${error.message}`;
+      }
+    }
+    updateViewerControls();
+  } catch (error) {
+    if (error?.name === "RenderingCancelledException") {
+      return;
+    }
+    if (renderSequence === state.renderSequence) {
+      state.renderTask = null;
+      elements.streamStatus.textContent = `PDF page render failed: ${error.message}`;
+    }
+  }
+}
+
 async function openPdf(file) {
   if (!file || (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf"))) {
     return;
   }
 
+  const openSequence = state.openSequence + 1;
+  state.openSequence = openSequence;
   state.currentFile = file;
-  state.viewerReady = false;
   elements.documentName.textContent = file.name;
-  elements.pageIndicator.textContent = "Page - / -";
-  elements.zoomIndicator.textContent = "100%";
   elements.streamStatus.textContent = "PDF 여는 중...";
   elements.emptyState.classList.add("is-hidden");
-  elements.pdfFrame.classList.remove("is-hidden");
+  elements.pdfViewport.classList.remove("is-hidden");
   loadHistory();
   if (state.historyIndex >= 0) {
     showHistoryRecord(state.historyIndex);
   }
 
   try {
+    await closePdfDocument();
     await deletePdfSession();
+
     const response = await fetch("/api/pdf-session", {
       method: "POST",
       headers: { "Content-Type": "application/pdf" },
@@ -490,39 +539,114 @@ async function openPdf(file) {
     if (!response.ok) {
       throw new Error((await response.text()) || `HTTP ${response.status}`);
     }
+
     const payload = await response.json();
+    if (openSequence !== state.openSequence) {
+      await fetch(`/api/pdf-session/${payload.session_id}`, { method: "DELETE" }).catch(() => {});
+      return;
+    }
+
     state.pdfSessionId = payload.session_id;
-    elements.pdfFrame.src =
-      `/pdfjs/web/viewer.html?file=${encodeURIComponent(payload.url)}`;
+    const loadingTask = pdfjsLib.getDocument({
+      url: payload.url,
+      cMapUrl: "/pdfjs/cmaps/",
+      cMapPacked: true,
+      standardFontDataUrl: "/pdfjs/standard_fonts/",
+      wasmUrl: "/pdfjs/wasm/",
+    });
+    state.pdfLoadingTask = loadingTask;
+    const pdfDocument = await loadingTask.promise;
+
+    if (openSequence !== state.openSequence) {
+      await loadingTask.destroy().catch(() => {});
+      return;
+    }
+
+    state.pdfDocument = pdfDocument;
+    state.currentPage = 1;
+    const firstPage = await pdfDocument.getPage(1);
+    state.zoomScale = computePageWidthScale(firstPage);
+    updateViewerControls();
+    elements.pdfViewport.scrollTop = 0;
+    await renderCurrentPage();
   } catch (error) {
-    state.viewerReady = false;
+    if (openSequence !== state.openSequence) {
+      return;
+    }
+    await closePdfDocument();
+    elements.pdfViewport.classList.add("is-hidden");
+    elements.emptyState.classList.remove("is-hidden");
     elements.streamStatus.textContent = `PDF open failed: ${error.message}`;
   }
 }
 
-function currentPdfApplication() {
-  if (!state.viewerReady) {
-    return null;
-  }
-  return elements.pdfFrame.contentWindow?.PDFViewerApplication ?? null;
-}
-
 function changePage(delta) {
-  const app = currentPdfApplication();
-  if (!app?.pdfDocument) {
+  const pages = state.pdfDocument?.numPages ?? 0;
+  if (!pages) {
     return;
   }
-  app.page = Math.min(Math.max(app.page + delta, 1), app.pagesCount);
+  const nextPage = Math.min(Math.max(state.currentPage + delta, 1), pages);
+  if (nextPage === state.currentPage) {
+    return;
+  }
+  state.currentPage = nextPage;
+  elements.pdfViewport.scrollTop = 0;
+  updateViewerControls();
+  void renderCurrentPage();
 }
 
 function changeZoom(delta) {
-  const app = currentPdfApplication();
-  if (!app?.pdfViewer) {
+  if (!state.pdfDocument) {
     return;
   }
-  const current = app.pdfViewer.currentScale || 1;
-  const next = Math.min(Math.max(current + delta, 0.5), 3.5);
-  app.pdfViewer.currentScaleValue = next.toFixed(2);
+  const nextScale = Math.min(
+    Math.max(state.zoomScale + delta, MIN_PDF_SCALE),
+    MAX_PDF_SCALE,
+  );
+  if (Math.abs(nextScale - state.zoomScale) < 0.001) {
+    return;
+  }
+  state.zoomScale = nextScale;
+  updateViewerControls();
+  void renderCurrentPage();
+}
+
+function selectedPdfText() {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return "";
+  }
+
+  const range = selection.getRangeAt(0);
+  const startNode =
+    range.startContainer.nodeType === Node.ELEMENT_NODE
+      ? range.startContainer
+      : range.startContainer.parentElement;
+  const endNode =
+    range.endContainer.nodeType === Node.ELEMENT_NODE
+      ? range.endContainer
+      : range.endContainer.parentElement;
+  if (
+    !startNode ||
+    !endNode ||
+    !elements.pdfTextLayer.contains(startNode) ||
+    !elements.pdfTextLayer.contains(endNode)
+  ) {
+    return "";
+  }
+  return selection.toString();
+}
+
+function handlePdfSelectionChange() {
+  if (state.selectionTimer) {
+    clearTimeout(state.selectionTimer);
+  }
+  state.selectionTimer = setTimeout(() => {
+    const text = selectedPdfText();
+    if (text) {
+      scheduleSelectedText(text);
+    }
+  }, 180);
 }
 
 async function copyText(text) {
@@ -620,8 +744,8 @@ function bindEvents() {
   elements.pdfInput.addEventListener("change", () => void openPdf(elements.pdfInput.files?.[0]));
   elements.previousPageButton.addEventListener("click", () => changePage(-1));
   elements.nextPageButton.addEventListener("click", () => changePage(1));
-  elements.zoomOutButton.addEventListener("click", () => changeZoom(-0.15));
-  elements.zoomInButton.addEventListener("click", () => changeZoom(0.15));
+  elements.zoomOutButton.addEventListener("click", () => changeZoom(-PDF_ZOOM_STEP));
+  elements.zoomInButton.addEventListener("click", () => changeZoom(PDF_ZOOM_STEP));
   elements.translateButton.addEventListener("click", () => void translateCurrentInput());
   elements.englishInput.addEventListener("input", updateInputState);
   elements.englishInput.addEventListener("keydown", (event) => {
@@ -669,19 +793,19 @@ function bindEvents() {
     }
   });
 
-  elements.pdfFrame.addEventListener("load", () => {
-    state.viewerReady = false;
-    void initializeLoadedViewer();
-  });
-
+  document.addEventListener("selectionchange", handlePdfSelectionChange);
   window.addEventListener("pagehide", () => {
     if (state.pdfSessionId) {
-      navigator.sendBeacon?.(`/api/pdf-session/${state.pdfSessionId}`);
+      void fetch(`/api/pdf-session/${state.pdfSessionId}`, {
+        method: "DELETE",
+        keepalive: true,
+      }).catch(() => {});
     }
   });
 }
 
 bindEvents();
 updateInputState();
+updateViewerControls();
 loadHistory();
 void checkHealth();

@@ -6,7 +6,8 @@
   <meta name="theme-color" content="#4f46e5">
   <title>Paper Translator</title>
   <link rel="manifest" href="/assets/manifest.webmanifest">
-  <link rel="stylesheet" href="/assets/style.css?v=20260818-2">
+  <link rel="stylesheet" href="/assets/style.css?v=20260819-1">
+  <link rel="stylesheet" href="/assets/pdf-renderer.css?v=20260819-1">
 </head>
 <body>
   <div id="appShell" class="app-shell">
@@ -41,12 +42,12 @@
           <h1>논문 PDF를 여세요</h1>
           <p>파일을 끌어다 놓거나 Open PDF를 누르세요.</p>
         </div>
-        <iframe
-          id="pdfFrame"
-          class="pdf-frame is-hidden"
-          title="PDF viewer"
-          src="/pdfjs/web/viewer.html?file="
-        ></iframe>
+        <div id="pdfViewport" class="pdf-viewport is-hidden" aria-label="PDF viewer">
+          <div id="pdfPage" class="pdf-page">
+            <canvas id="pdfCanvas" class="pdf-canvas"></canvas>
+            <div id="pdfTextLayer" class="pdf-text-layer textLayer"></div>
+          </div>
+        </div>
         <div id="dropOverlay" class="drop-overlay">PDF를 놓아서 엽니다</div>
       </section>
 
@@ -133,6 +134,6 @@
     <div id="glossaryTable" class="glossary-table"></div>
   </dialog>
 
-  <script type="module" src="/assets/app.js?v=20260818-2"></script>
+  <script type="module" src="/assets/app.js?v=20260819-1"></script>
 </body>
 </html>
