@@ -33,16 +33,17 @@ Windows / Linux / Android browser
 Browser는 다음을 담당합니다.
 
 - 사용자 장치의 PDF 파일 선택
-- PDF.js viewer 표시
-- text selection
+- PDF.js library를 통한 canvas 렌더링
+- PDF.js `TextLayer` 기반 text selection
 - 직접 영어 입력
 - streaming translation 표시
 - Markdown 렌더링
 - 최근 번역 history의 `localStorage` 저장
 
 PDF를 열 때 browser는 원본 binary를 Paper Translator server의 임시 PDF session으로 한 번 전송합니다.
-PDF.js는 같은-origin HTTP URL을 통해 해당 session을 읽습니다. 이 구조는 browser별 Blob URL과 iframe
-초기화 차이를 피하기 위한 것입니다.
+PDF.js library는 `viewer.html` iframe을 사용하지 않고 같은-origin session URL을 `getDocument()`로 읽어
+canvas와 `TextLayer`를 직접 렌더링합니다. 이 구조는 browser별 Blob URL과 embedded viewer 초기화 차이를
+피하면서 PDF 표시와 text selection에 필요한 기능만 유지하기 위한 것입니다.
 
 ## Server 책임
 

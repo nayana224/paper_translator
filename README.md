@@ -6,7 +6,7 @@
 
 ## 주요 기능
 
-- PDF.js 기반 PDF viewer와 browser-native text selection
+- PDF.js library를 직접 사용하는 canvas renderer와 selectable text layer
 - PDF drag & drop / 파일 선택
 - 선택 영역 자동 번역과 직접 영어 입력 번역
 - TranslateGemma streaming 응답 표시
